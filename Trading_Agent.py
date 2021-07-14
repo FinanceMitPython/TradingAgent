@@ -1,23 +1,41 @@
 import gym
 import gym_anytrading
+from gym_anytrading.envs import StocksEnv
 
 import yfinance
 import numpy as np
 import matplotlib.pyplot as plt
+from finta import TA
 
 from tensorflow.keras.layers import Activation, Dense
 from tensorflow.keras.models import Sequential
 from tensorflow.keras.optimizers import Adam
 from tensorflow.keras.utils import to_categorical
 
-ticker = yfinance.Ticker("AAPL")
+ticker = yfinance.Ticker("AMC")
 
 df = ticker.history(period="1y")
+
+df['SMA'] = TA.SMA(df, 12)
+df['RSI'] = TA.RSI(df)
+df['OBV'] = TA.OBV(df)
+
+df.dropna(inplace=True)
+
+def my_process_data(env):
+    start = env.frame_bound[0] - env.window_size
+    end = env.frame_bound[1]
+    prices = env.df.loc[:, 'Low'].to_numpy()[start:end]
+    signal_features = env.df.loc[:, ['Close', 'Open', 'High', 'Low', 'SMA', 'RSI', 'OBV']].to_numpy()[start:end]
+    return prices, signal_features
+
+class CustomEnv(StocksEnv):
+    _process_data = my_process_data
 
 class Agent:
     def __init__(self, env):
         self.env = env
-        self.state = self.env.frame_bound[0]
+        self.state = 7
         self.actions = self.env.action_space.n
         self.model = self.get_model()
         
@@ -52,7 +70,10 @@ class Agent:
             while True:
                 action = self.get_action(state)
                 new_state, reward, done, info = self.env.step(action)
-                total_reward = info["total_profit"]
+                total_reward += reward
+                print(reward)
+                print(total_reward)
+                input()
                 episodes[episode].append((state, action))
                 state = new_state
                 if done:
@@ -66,7 +87,7 @@ class Agent:
         x_train, y_train = [], []
         for reward, episode in zip(rewards, episodes):
             if reward >= reward_bound:
-                observation = [step[0].reshape(env.frame_bound[0]) for step in episode]
+                observation = [step[0].reshape(self.state) for step in episode]
                 action = [step[1] for step in episode]
                 x_train.extend(observation)
                 y_train.extend(action)
@@ -82,37 +103,39 @@ class Agent:
             self.model.fit(x=x_train, y=y_train, verbose=0)
             reward_mean = np.mean(rewards)
             print(f"Reward mean: {reward_mean}, reward bound: {reward_bound}")
-            if reward_mean > 2.0:
+            if reward_mean > 20:
                 break
     
-    def trade(self, num_episodes: int, render: bool = True):
+    def trade(self, num_episodes: int, render: bool = False):
         for episode in range(num_episodes):
             state = self.env.reset()
             while True:
                 action = self.get_action(state)
                 n_state, reward, done, info = self.env.step(action)
-                if render:
-                    if info["total_reward"] > 10:
-                        env.render()
+                # if render:
+                #     if info["total_reward"] > 10:
+                #         env.render()
                 if done:
                     print(info)
                     break
 
-    def test_trade(self, num_episodes, render = True):
-        for episode in range(num_episodes):
-            env = gym.make("stocks-v0", df=df, frame_bound=(200,250), window_size=5)
-            state = env.reset()
-            while True:
-                action = self.get_action(state)
-                n_state, reward, done, info = env.step(action)
-                env.render()
-                if done:
-                    print(info)
-                    break
+    # def test_trade(self, num_episodes, render = True):
+    #     for episode in range(num_episodes):
+    #         env = CustomEnv(df=df, window_size=1, frame_bound=(100,150))
+    #         #env = gym.make("stocks-v0", df=df, frame_bound=(100,150), window_size=5)
+    #         state = env.reset()
+    #         while True:
+    #             action = self.get_action(state)
+    #             n_state, reward, done, info = env.step(action)
+    #             env.render()
+    #             if done:
+    #                 print(info)
+    #                 break
 
 if __name__ == "__main__":
-    env = gym.make("stocks-v0", df=df, frame_bound=(10,200), window_size=5)
+    env = CustomEnv(df=df, window_size=1, frame_bound=(10,100))
+    #env = gym.make("stocks-v0", df=df, frame_bound=(10,100), window_size=5)
     agent = Agent(env)
-    agent.train(percentile = 70.0, num_iterations=10, num_episodes=100)
+    agent.train(percentile = 90.0, num_iterations=100, num_episodes=100)
     agent.trade(num_episodes = 10, render=False)
-    agent.test_trade(num_episodes = 10)
+    # agent.test_trade(num_episodes = 10)
